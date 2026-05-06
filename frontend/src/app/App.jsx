@@ -150,25 +150,135 @@ function App() {
 
   const [users, setUsers] = useState([]);
 
+  // =========================
+  // YJS DOC
+  // =========================
   const ydoc = useMemo(() => new Y.Doc(), []);
+
+  const yFiles = useMemo(() => ydoc.getMap("files"), [ydoc]);
+  const yActiveFile = useMemo(() => ydoc.getText("activeFile"), [ydoc]);
   const yText = useMemo(() => ydoc.getText("monaco"), [ydoc]);
-const [output, setOutput] = useState("");
-const [language, setLanguage] = useState("javascript");
-  
-const handlemount = (editor) => {
-  editorRef.current = editor;
 
-  setTimeout(() => {
-    if (!providerRef.current) return;
+  const [files, setFiles] = useState([]);
+  const [activeFile, setActiveFile] = useState("");
 
-    new MonacoBinding(
-      yText,
-      editor.getModel(),
-      new Set([editor]),
-      providerRef.current.awareness
-    );
-  }, 200);
-};
+  const [output, setOutput] = useState("");
+
+  // =========================
+  // SYNC FILES FROM YJS
+  // =========================
+  useEffect(() => {
+    const update = () => {
+      setFiles(Array.from(yFiles.values()));
+    };
+
+    update();
+    yFiles.observe(update);
+
+    return () => yFiles.unobserve(update);
+  }, [yFiles]);
+
+  // =========================
+  // SYNC ACTIVE FILE
+  // =========================
+  useEffect(() => {
+    const update = () => {
+      setActiveFile(yActiveFile.toString());
+    };
+
+    update();
+    yActiveFile.observe(update);
+
+    return () => yActiveFile.unobserve(update);
+  }, [yActiveFile]);
+
+  // =========================
+  // INIT FIRST FILE
+  // =========================
+  useEffect(() => {
+    if (yFiles.size === 0) {
+      const id = "1";
+
+      yFiles.set(id, {
+        id,
+        name: "main.js",
+        language: "javascript",
+        content: "console.log('Hello World');",
+      });
+
+      yActiveFile.insert(0, id);
+    }
+  }, []);
+
+  const activeFileData = files.find((f) => f.id === activeFile);
+
+  // =========================
+  // CREATE FILE (SYNCED)
+  // =========================
+  const createFile = () => {
+    const id = Date.now().toString();
+
+    yFiles.set(id, {
+      id,
+      name: `file${yFiles.size + 1}.js`,
+      language: "javascript",
+      content: "// new file",
+    });
+
+    yActiveFile.delete(0, yActiveFile.length);
+    yActiveFile.insert(0, id);
+  };
+
+  // =========================
+  // DELETE FILE (SYNCED)
+  // =========================
+  const deleteFile = (id) => {
+    yFiles.delete(id);
+
+    if (yActiveFile.toString() === id) {
+      const remaining = Array.from(yFiles.keys());
+
+      if (remaining.length > 0) {
+        yActiveFile.delete(0, yActiveFile.length);
+        yActiveFile.insert(0, remaining[0]);
+      }
+    }
+  };
+
+  // =========================
+  // RENAME FILE (SYNCED)
+  // =========================
+  const renameFile = (id, newName) => {
+    const file = yFiles.get(id);
+    if (!file) return;
+
+    yFiles.set(id, {
+      ...file,
+      name: newName,
+    });
+  };
+
+  // =========================
+  // MONACO
+  // =========================
+  const handlemount = (editor) => {
+    editorRef.current = editor;
+
+    setTimeout(() => {
+      if (!providerRef.current) return;
+
+      new MonacoBinding(
+        yText,
+        editor.getModel(),
+        new Set([editor]),
+        providerRef.current.awareness
+      );
+    }, 200);
+  };
+
+  // =========================
+  // JOIN USER
+  // =========================
   const handleJoin = (e) => {
     e.preventDefault();
     const name = e.target.username.value;
@@ -178,6 +288,9 @@ const handlemount = (editor) => {
     window.history.pushState({}, "", "?username=" + name);
   };
 
+  // =========================
+  // SOCKET + YJS
+  // =========================
   useEffect(() => {
     if (!username) return;
 
@@ -185,7 +298,7 @@ const handlemount = (editor) => {
       "http://localhost:3000",
       "monaco",
       ydoc,
-      {autoConnect:true}
+      { autoConnect: true }
     );
 
     providerRef.current = provider;
@@ -194,11 +307,7 @@ const handlemount = (editor) => {
 
     const updateUsers = () => {
       const states = Array.from(provider.awareness.getStates().values());
-
-      const activeUsers = states
-        .map((s) => s.user)
-        .filter(Boolean);
-
+      const activeUsers = states.map((s) => s.user).filter(Boolean);
       setUsers(activeUsers);
     };
 
@@ -217,125 +326,169 @@ const handlemount = (editor) => {
     };
   }, [username]);
 
+  // =========================
+  // RUN CODE
+  // =========================
+  const runCode = () => {
+    const code = activeFileData?.content || "";
 
-const runCode = () => {
-  if (!editorRef.current) return;
+    try {
+      const logs = [];
+      const originalLog = console.log;
 
-  const code = editorRef.current.getValue();
+      console.log = (...args) => {
+        logs.push(args.join(" "));
+      };
 
-  try {
-    const logs = [];
-    
-    const originalLog = console.log;
+      new Function(code)();
 
-    console.log = (...args) => {
-      logs.push(args.join(" "));
-    };
+      console.log = originalLog;
 
-    // Execute user code
-    const result = new Function(code)();
-    
-    console.log = originalLog;
+      setOutput(logs.join("\n") || "No output");
+    } catch (err) {
+      setOutput(err.message);
+    }
+  };
 
-    setOutput(logs.join("\n") || "No output");
-  } catch (err) {
-    setOutput(err.message);
-  }
-};
- 
+  // =========================
+  // LOGIN SCREEN
+  // =========================
   if (!username) {
     return (
       <main className="h-screen w-full bg-gray-900 flex items-center justify-center">
         <div className="bg-gray-500 p-2 rounded-lg">
-        <form onSubmit={handleJoin} className="flex flex-col gap-4">
-          <input
-            type="text"
-            name="username"
-            placeholder="Enter username"
-            className="p-2 rounded-lg bg-gray-700 text-white"
-          />
-          <button className="p-2 rounded-lg bg-amber-50 text-black font-bold">
-            Join
-          </button>
-        </form>
+          <form onSubmit={handleJoin} className="flex flex-col gap-4">
+            <input
+              type="text"
+              name="username"
+              placeholder="Enter username"
+              className="p-2 rounded-lg bg-gray-700 text-white"
+            />
+            <button className="p-2 rounded-lg bg-amber-50 text-black font-bold">
+              Join
+            </button>
+          </form>
         </div>
       </main>
     );
   }
 
- return (
-  <main className="h-screen flex bg-gray-900 text-white">
+  // =========================
+  // UI (UNCHANGED)
+  // =========================
+  return (
+    <main className="h-screen flex bg-gray-900 text-white">
 
-  {/* LEFT SIDEBAR */}
-  <aside className="w-64 bg-amber-50/10 backdrop-blur-md border-r border-amber-200/20 flex flex-col text-white">
-    
-    <div className="p-4 border-b border-gray-700">
-    <h2 className="text-lg font-bold text-amber-50 bg-gray-900 px-3 py-2 rounded-md border border-amber-200/30">
- Users ({users.length})
-</h2>
-    </div>
+      {/* LEFT SIDEBAR */}
+      <aside className="w-64 bg-amber-50/10 backdrop-blur-md border-r border-amber-200/20 flex flex-col text-white">
 
-    <ul className="flex-1 overflow-y-auto p-3 space-y-2">
-      {users.map((user, i) => (
-        <li
-          key={i}
-          className="flex items-center gap-2 bg-gray-900/40 p-2 rounded border border-amber-200/10 hover:bg-amber-50/10 transition">
-          <div className="w-2 h-2 bg-green-400 rounded-full"></div>
-          {user.username}
-        </li>
-      ))}
-    </ul>
-  </aside>
+        <div className="p-4 border-b border-gray-700">
+          <h2 className="text-lg font-bold text-amber-50 bg-gray-900 px-3 py-2 rounded-md border border-amber-200/30">
+            Users ({users.length})
+          </h2>
+        </div>
 
-  {/* RIGHT SIDE */}
-  <section className="flex-1 flex flex-col">
+        <ul className="flex-1 overflow-y-auto p-3 space-y-2">
+          {users.map((user, i) => (
+            <li key={i} className="flex items-center gap-2 bg-gray-900/40 p-2 rounded">
+              <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+              {user.username}
+            </li>
+          ))}
+        </ul>
 
-    {/* TOP BAR */}
-    <div className="h-12 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-4">
+        <div className="p-2 border-t border-gray-700">
+          <button
+            onClick={createFile}
+            className="w-full bg-gray-700 hover:bg-gray-600 text-sm py-1 rounded"
+          >
+            + New File
+          </button>
+        </div>
 
-      <div className="flex items-center gap-3">
-        <span>Logged in as <b>{username}</b></span>
+        <div className="p-2 space-y-2 overflow-y-auto">
+          {files.map((file) => (
+            <div
+              key={file.id}
+              className={`p-2 rounded text-sm flex items-center justify-between ${
+                activeFile === file.id ? "bg-gray-700" : "hover:bg-gray-800"
+              }`}
+            >
+              <span
+                onClick={() => {
+                  yActiveFile.delete(0, yActiveFile.length);
+                  yActiveFile.insert(0, file.id);
+                }}
+                className="cursor-pointer flex-1"
+              >
+                📄 {file.name}
+              </span>
 
-      <select
-  disabled
-  className="bg-gray-700 p-1 rounded opacity-50 cursor-not-allowed"
->
-  <option>JavaScript (only supported)</option>
-</select>
-      </div>
+              <input
+                value={file.name}
+                onChange={(e) => renameFile(file.id, e.target.value)}
+                className="bg-transparent text-xs text-gray-300 w-20 outline-none border-b border-gray-600 mx-2"
+              />
 
-      <button
-        onClick={runCode}
-        className="bg-green-500 px-4 py-1 rounded hover:bg-green-400"
-      >
-        Run Code
-      </button>
-    </div>
+              <button
+                onClick={() => deleteFile(file.id)}
+                className="text-red-400 text-xs hover:text-red-300"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      </aside>
 
-    {/* EDITOR + OUTPUT */}
-    <div className="flex flex-1">
+      {/* RIGHT SIDE (UNCHANGED) */}
+      <section className="flex-1 flex flex-col">
 
-      {/* EDITOR */}
-      <div className="w-2/3">
-        <Editor
-          height="100%"
-          defaultLanguage="javascript"
-          theme="vs-dark"
-          onMount={handlemount}
-        />
-      </div>
+        <div className="h-12 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-4">
+          <span>
+            Logged in as <b>{username}</b>
+          </span>
 
-      {/* OUTPUT PANEL */}
-      <div className="w-1/3 bg-black p-3 border-l border-gray-700 overflow-auto">
-        <h2 className="font-semibold mb-2">Output</h2>
-        <pre className="text-green-400 whitespace-pre-wrap">
-          {output || "Run code to see output..."}
-        </pre>
-      </div>
+          <button
+            onClick={runCode}
+            className="bg-green-500 px-4 py-1 rounded"
+          >
+            Run Code
+          </button>
+        </div>
 
-    </div>
-  </section>
-</main>
+        <div className="flex flex-1 overflow-hidden">
+
+          <div className="w-2/3 h-full overflow-hidden">
+            <Editor
+              height="100%"
+              theme="vs-dark"
+              language="javascript"
+              value={activeFileData?.content || ""}
+              onChange={(value) => {
+                if (!activeFile) return;
+
+                const file = yFiles.get(activeFile);
+                if (!file) return;
+
+                yFiles.set(activeFile, {
+                  ...file,
+                  content: value || "",
+                });
+              }}
+              onMount={handlemount}
+            />
+          </div>
+
+          <div className="w-1/3 bg-black p-3 border-l border-gray-700 overflow-auto">
+            <pre className="text-green-400">
+              {output || "Run code to see output..."}
+            </pre>
+          </div>
+
+        </div>
+      </section>
+    </main>
   );
 }
 
