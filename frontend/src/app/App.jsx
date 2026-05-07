@@ -432,7 +432,7 @@ function App() {
 
               <button
                 onClick={() => deleteFile(file.id)}
-                className="text-red-400 text-xs hover:text-red-300"
+                className="text-red-600 text-xs hover:text-red-300"
               >
                 ✕
               </button>
